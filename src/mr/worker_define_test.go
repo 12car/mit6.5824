@@ -3,13 +3,14 @@ package mr
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"unicode"
 )
 
-var filePath []string = []string{
+var filePaths []string = []string{
 	"../main/pg-being_ernest.txt",
 	"../main/pg-dorian_gray.txt",
 	"../main/pg-frankenstein.txt",
@@ -49,58 +50,63 @@ func Reduce(key string, values []string) string {
 
 func TestMakeMaster(t *testing.T) {
 	t.Run("TestMakeMaster", func(t *testing.T) {
-		master := MakeMaster(10, filePath, MapF, ReduceF)
+		master := MakeMaster(10, filePaths, MapF, ReduceF)
 		t.Logf("%v \n", master)
 	})
 }
 
 func TestMaster_InitWorkers(t *testing.T) {
-	master := MakeMaster(10, filePath, MapF, ReduceF)
+	master := MakeMaster(10, filePaths, MapF, ReduceF)
 	master.InitWorkers()
 }
 
+// TestWorkerDoTask
 func TestWorkerDoTask(t *testing.T) {
-	master := MakeMaster(10, filePath, MapF, ReduceF)
-	filename := filePath[0]
-	mapWorker := master.MakeMapWorker(filename)
+	master := MakeMaster(10, filePaths, MapF, ReduceF)
+	filePath := filePaths[0]
+	_, filename := filepath.Split(filePath)
+	mapWorker := master.MakeMapWorker(filePath, 1)
 
-	err := mapWorker.doTask()
+	err := mapWorker.start()
 
 	if err != nil {
-		t.Fatalf("do task fail.")
+		t.Fatalf("worker task fail: %v.\n", err)
 	}
 
-	_, exist := master.MapFileMap[filename]
+	_, exist := master.MapFileMap[filePath]
 	if exist {
 		t.Fatalf("delete filename map set fail")
 	}
 
-	intermediaFilename := fmt.Sprintf("map_out_%s", filename)
+	intermediaFilename := basePath + fmt.Sprintf("map_out_%s", filename)
 	t.Logf("map intermiedia filename: %s. \n", intermediaFilename)
 
-	reduceTempFile, exist := master.ReduceTempFileMap[intermediaFilename]
+	_, exist = master.ReduceTempFileMap[intermediaFilename]
 	if !exist {
 		t.Fatalf("put filename reduce set fail")
 	}
 
-	reduceWorker := master.MakeReduceWorker()
+	reduceWorker := master.MakeReduceWorker(1)
 
-	err = reduceWorker.doTask()
+	err = reduceWorker.start()
 
 	if err != nil {
 		t.Fatalf("do task fail.")
 	}
 
-	if reduceTempFile {
-		keyValues := parseIntermediaFile(readFile(intermediaFilename))
-		for k, v := range keyValues {
-			reduceWorker.ReduceF(k, v)
-		}
+	if reduceWorker.Status&completed == 0 {
+		t.Fatalf("reduce worker status fail: %v\n", reduceWorker.Status)
 	}
+
+	_, exist = master.ReduceTempFileMap[intermediaFilename]
+	if exist {
+		t.Fatalf("reduce worker delete map fail: %s\n", intermediaFilename)
+	}
+
 }
 
 func TestReadFile(t *testing.T) {
-	filepath := filePath[0]
+	filepath := filePaths[0]
 	filename, _ := strings.CutPrefix(filepath, "../main/")
 	content := readFile(filepath)
 
@@ -119,4 +125,9 @@ func TestReadFile(t *testing.T) {
 
 	t.Logf("reduce finished. removing intermedia file...\n")
 	_ = os.Remove(basePath + intermediaFilename)
+}
+
+func TestGoroutineForTwo(t *testing.T) {
+	m := MakeMaster(1, filePaths, Map, Reduce)
+	m.InitWorkers()
 }
