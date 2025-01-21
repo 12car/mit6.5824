@@ -25,21 +25,14 @@ func ihash(key string) int {
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
-	CallInit()
+	reply := CallInit()
 	// Your worker implementation here.
-	CallExample()
-	for i := 0; i < 10; i++ {
-		CallDone()
-	}
-	// 先通过rpc 询问nReduce和中间文件名
-
-	// 启动nReduce个MapWorker和ReduceWorker
-
-	// Map完成再通过Reduce处理任务
+	master := MakeMaster(reply.WorkerAmount, reply.FileNames, mapf, reducef)
+	master.Serve()
 
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
-
+	CallDone()
 }
 
 // example function to show how to make an RPC call to the coordinator.
@@ -76,9 +69,7 @@ func CallDone() {
 	for times := 0; !ok && times < 3; times++ {
 		ok = call("Coordinator.CallDone", new(interface{}), new(interface{}))
 	}
-	if ok {
-		// TODO: destory all worker
-	} else {
+	if !ok {
 		log.Fatalf("Fail to call Coordinator.CallDone for three tiems.")
 	}
 }

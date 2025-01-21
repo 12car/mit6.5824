@@ -1,6 +1,7 @@
 package mr
 
 import (
+	"6.5840/util"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -52,20 +53,27 @@ func TestMakeMaster(t *testing.T) {
 	t.Run("TestMakeMaster", func(t *testing.T) {
 		master := MakeMaster(10, filePaths, MapF, ReduceF)
 		t.Logf("%v \n", master)
+		master.Lock()
+		master.Unlock()
 	})
 }
 
 func TestMaster_InitWorkers(t *testing.T) {
 	master := MakeMaster(10, filePaths, MapF, ReduceF)
-	master.InitWorkers()
+	master.Serve()
 }
 
 // TestWorkerDoTask
 func TestWorkerDoTask(t *testing.T) {
-	master := MakeMaster(10, filePaths, MapF, ReduceF)
-	filePath := filePaths[0]
+
+	paths := make([]string, 0, len(filePaths))
+	paths = append(paths, filePaths[0])
+	paths = append(paths, filePaths[2:]...)
+	t.Logf("master paths: %v\n", paths)
+	master := MakeMaster(10, paths, MapF, ReduceF)
+	filePath := filePaths[1]
 	_, filename := filepath.Split(filePath)
-	mapWorker := master.MakeMapWorker(filePath, 1)
+	mapWorker := master.makeMapWorker(filePath, 1)
 
 	err := mapWorker.start()
 
@@ -73,7 +81,15 @@ func TestWorkerDoTask(t *testing.T) {
 		t.Fatalf("worker task fail: %v.\n", err)
 	}
 
-	_, exist := master.MapFileMap[filePath]
+	exist := false
+	master.MapFile.ForEach(func(value util.T) bool {
+		mapFilePath, ok := value.(string)
+		if ok && filePath == mapFilePath {
+			exist = true
+			return false
+		}
+		return true
+	})
 	if exist {
 		t.Fatalf("delete filename map set fail")
 	}
@@ -81,12 +97,20 @@ func TestWorkerDoTask(t *testing.T) {
 	intermediaFilename := basePath + fmt.Sprintf("map_out_%s", filename)
 	t.Logf("map intermiedia filename: %s. \n", intermediaFilename)
 
-	_, exist = master.ReduceTempFileMap[intermediaFilename]
+	exist = false
+	master.ReduceTempFile.ForEach(func(value util.T) bool {
+		reduceFilePath, ok := value.(string)
+		if ok && intermediaFilename == reduceFilePath {
+			exist = true
+			return false
+		}
+		return true
+	})
 	if !exist {
 		t.Fatalf("put filename reduce set fail")
 	}
 
-	reduceWorker := master.MakeReduceWorker(1)
+	reduceWorker := master.makeReduceWorker(1)
 
 	err = reduceWorker.start()
 
@@ -98,11 +122,14 @@ func TestWorkerDoTask(t *testing.T) {
 		t.Fatalf("reduce worker status fail: %v\n", reduceWorker.Status)
 	}
 
-	_, exist = master.ReduceTempFileMap[intermediaFilename]
-	if exist {
-		t.Fatalf("reduce worker delete map fail: %s\n", intermediaFilename)
-	}
-
+	master.ReduceTempFile.ForEach(func(value util.T) bool {
+		reduceFilePath, ok := value.(string)
+		if ok && intermediaFilename == reduceFilePath {
+			t.Fatalf("reduce worker delete map fail: %s\n", intermediaFilename)
+			return false
+		}
+		return true
+	})
 }
 
 func TestReadFile(t *testing.T) {
@@ -128,6 +155,43 @@ func TestReadFile(t *testing.T) {
 }
 
 func TestGoroutineForTwo(t *testing.T) {
-	m := MakeMaster(1, filePaths, Map, Reduce)
-	m.InitWorkers()
+	m := MakeMaster(10, filePaths, Map, Reduce)
+	m.Serve()
+}
+
+func TestMapFileWrite(t *testing.T) {
+	fileContent := readFile(filePaths[0])
+
+	kvs := MapF(filePaths[0], fileContent)
+
+	buf := make([]byte, 0, 64*1024)
+	cnt := 0
+	for _, kv := range kvs {
+		input := fmt.Sprintf("%s %s\n", kv.Key, kv.Value)
+		cnt += len(input)
+
+		if cap(buf) <= len(buf)+len(input) {
+			canWrite := cap(buf) - len(buf)
+			buf = append(buf, input[:canWrite]...)
+			input = input[canWrite:]
+			if len(buf) == 64*1024 {
+				t.Logf("缓冲区充满了, 正在写入 %d 字节, 剩下 %d 字节待缓冲\n", len(buf), len(input))
+				buf = buf[:0]
+			} else {
+				t.Fatalf("缓冲区没有充满, len = %d\n", len(buf))
+			}
+
+		}
+		t.Logf("缓冲 %d 字节数据\n", len(input))
+		buf = append(buf, input...)
+	}
+	if len(buf) > 0 {
+		// do sth
+		t.Logf("最后剩下 %d 字节数据\n", len(buf))
+		if cnt%(64*1024) != len(buf) {
+			t.Fatalf("漏传了 %d 个字节\n", cnt%(64*1026)-len(buf))
+		}
+		buf = buf[:0]
+	}
+
 }
